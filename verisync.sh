@@ -228,7 +228,7 @@ echo ""
 info "Hashing ${SRC_FILES} file(s) …"
 echo ""
 
-> "$CHECKSUM_FILE"   # ensure file exists and is empty
+true > "$CHECKSUM_FILE"   # ensure file exists and is empty
 
 if [ "$IS_FILE" = true ]; then
     printf "  [1/1] %s\n" "$(basename "$SRC_DIR")"
