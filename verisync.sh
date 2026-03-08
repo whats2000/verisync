@@ -225,18 +225,31 @@ TRANSFER_START=$(date +%s)
 # ── Step 4 : Generate SHA-256 checksums ───────────────────────────────────────
 echo -e "${BOLD}[Step 4/5] Generating SHA-256 Checksums${NC}"
 echo ""
-info "Hashing ${SRC_FILES} files — this can take a while for large datasets …"
+info "Hashing ${SRC_FILES} file(s) …"
 echo ""
 
+> "$CHECKSUM_FILE"   # ensure file exists and is empty
+
 if [ "$IS_FILE" = true ]; then
-    sha256sum "$SRC_DIR" > "$CHECKSUM_FILE"
+    printf "  [1/1] %s\n" "$(basename "$SRC_DIR")"
+    sha256sum "$SRC_DIR" >> "$CHECKSUM_FILE"
 else
-    find "$SRC_DIR" -type f -print0 \
-        | xargs -0 sha256sum \
-        > "$CHECKSUM_FILE"
+    # Collect file list up-front (reuse SRC_FILES count already computed)
+    HASH_IDX=0
+    PAD=${#SRC_FILES}   # width of the total number for alignment
+    while IFS= read -r -d '' filepath; do
+        (( HASH_IDX++ )) || true
+        # Overwrite the same terminal line
+        printf "\r  [%${PAD}d/%d] %s" \
+            "$HASH_IDX" "$SRC_FILES" \
+            "$(basename "$filepath")"
+        sha256sum "$filepath" >> "$CHECKSUM_FILE"
+    done < <(find "$SRC_DIR" -type f -print0 | sort -z)
+    echo ""   # newline after the overwrite line
 fi
 
 CHECKSUM_COUNT=$(wc -l < "$CHECKSUM_FILE")
+echo ""
 ok "${CHECKSUM_COUNT} checksum(s) written to $(basename "$CHECKSUM_FILE")"
 echo ""
 
