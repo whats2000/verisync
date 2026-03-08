@@ -1,4 +1,4 @@
-﻿# verisync ??Interactive Directory Transfer with Checksum Verification
+# verisync — Interactive Directory Transfer with Checksum Verification
 
 <div align="center">
 
@@ -7,7 +7,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 **A general-purpose interactive file/directory transfer utility with end-to-end SHA-256 checksum verification over SSH.**  
-Transfer files or directories to a remote server via rsync or tar.gz, then automatically verify every file's integrity ??all from a single command.
+Transfer files or directories to a remote server via rsync or tar.gz, then automatically verify every file's integrity — all from a single command.
 
 </div>
 
@@ -33,14 +33,14 @@ Transfer files or directories to a remote server via rsync or tar.gz, then autom
 
 ## Features
 
-- ?? **File and directory** ??transfer a single file or an entire directory tree
-- ??**End-to-end SHA-256 verification** ??a checksum manifest is generated locally and re-verified remotely after transfer
-- ?鳴? **rsync mode** (default) ??incremental, resumable, and bandwidth-efficient
-- ??儭?**Zip mode** (`--zip`) ??packs source into a `.tar.gz`, uploads, and auto-extracts on the remote
-- ?? **SSH multiplexing** ??a single SSH control socket is reused across all remote operations, including 2FA/password auth flows
-- ?? **Space checks** ??remote free disk space is measured before transfer; warns if source exceeds 100 GiB
-- ?儭?**Interactive + CLI** ??all parameters can be supplied as CLI flags or entered interactively at runtime
-- ?? **Elapsed time** ??reports total transfer and verification duration
+- 📁 **File and directory** — transfer a single file or an entire directory tree
+- ✅ **End-to-end SHA-256 verification** — a checksum manifest is generated locally and re-verified remotely after transfer
+- ♻️ **rsync mode** (default) — incremental, resumable, and bandwidth-efficient
+- 🗜️ **Zip mode** (`--zip`) — packs source into a `.tar.gz`, uploads, and auto-extracts on the remote
+- 🔌 **SSH multiplexing** — a single SSH control socket is reused across all remote operations, including 2FA/password auth flows
+- 📏 **Space checks** — remote free disk space is measured before transfer; warns if source exceeds 100 GiB
+- 🖥️ **Interactive + CLI** — all parameters can be supplied as CLI flags or entered interactively at runtime
+- 🕒 **Elapsed time** — reports total transfer and verification duration
 
 ---
 
@@ -48,14 +48,14 @@ Transfer files or directories to a remote server via rsync or tar.gz, then autom
 
 | Requirement    | Notes                                                              |
 | -------------- | ------------------------------------------------------------------ |
-| **Bash ??4.0** | Required for string manipulations and `set -euo pipefail`         |
+| **Bash >= 4.0** | Required for string manipulations and `set -euo pipefail`        |
 | **rsync**      | Used for incremental file transfer in default mode                 |
 | **ssh**        | SSH client with multiplexing (`ControlMaster`) support             |
 | **sha256sum**  | Standard coreutils tool, available on all Linux/macOS systems      |
 | **bc**         | Used for human-readable size arithmetic                            |
 | **tar**        | Only required when using `--zip` mode                              |
 
-> **Note:** `verisync` only needs to be installed on the **source machine**. The remote side requires only `sha256sum` and standard POSIX shell tools ??no remote installation needed.
+> **Note:** `verisync` only needs to be installed on the **source machine**. The remote side requires only `sha256sum` and standard POSIX shell tools — no remote installation needed.
 
 ---
 
@@ -128,12 +128,12 @@ verisync -s /data/project -u alice -H hpc.example.com -d /scratch/alice/ --zip
 
 ## Transfer Steps
 
-| Step | Description                                                               |
-| ---- | ------------------------------------------------------------------------- |
-| 1    | Collect source path, remote user, host, and destination                   |
-| 2    | Measure local size; warn if > 100 GiB                                     |
-| 3    | Test SSH connectivity; check remote free disk space                       |
-| 4    | Generate SHA-256 checksum manifest for every file in the source           |
+| Step | Description                                                                |
+| ---- | -------------------------------------------------------------------------- |
+| 1    | Collect source path, remote user, host, and destination                    |
+| 2    | Measure local size; warn if > 100 GiB                                      |
+| 3    | Test SSH connectivity; check remote free disk space                        |
+| 4    | Generate SHA-256 checksum manifest for every file in the source            |
 | 5    | Transfer files + manifest via rsync (or tar.gz); verify checksums remotely |
 
 ---
@@ -142,9 +142,9 @@ verisync -s /data/project -u alice -H hpc.example.com -d /scratch/alice/ --zip
 
 | Feature             | rsync (default)         | `--zip` mode              |
 | ------------------- | ----------------------- | ------------------------- |
-| Resumable?          | ??Yes                  | ??No                     |
-| Incremental?        | ??Yes                  | ??No                     |
-| Single archive?     | ??No                   | ??Yes                    |
+| Resumable?          | Yes                     | No                        |
+| Incremental?        | Yes                     | No                        |
+| Single archive?     | No                      | Yes                       |
 | Compression         | `-z` (inline)           | `gzip` (pre-compressed)   |
 | Remote extraction   | Not needed              | Auto-extracted via `tar`  |
 
@@ -158,4 +158,4 @@ Bug reports and pull requests are welcome at [github.com/whats2000/verisync](htt
 
 ## License
 
-MIT ??see [LICENSE](LICENSE) for details.
+MIT — see [LICENSE](LICENSE) for details.
