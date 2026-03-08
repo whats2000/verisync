@@ -16,7 +16,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Check Bash syntax
-        run: bash -n nvnodetop.sh
+        run: bash -n verisync.sh
 
       - name: Shellcheck
         uses: ludeeus/action-shellcheck@master

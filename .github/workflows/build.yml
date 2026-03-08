@@ -23,7 +23,7 @@ jobs:
         run: pip install hatchling build
 
       - name: Strip CRLF from shell script (guarantee LF in wheel)
-        run: sed -i $'s/\r//' nvnodetop.sh
+        run: sed -i $'s/\r//' verisync.sh
 
       - name: Build sdist and wheel
         run: python -m build
@@ -31,14 +31,14 @@ jobs:
       - name: Upload wheel
         uses: actions/upload-artifact@v4
         with:
-          name: nvnodetop-wheel
+          name: verisync-wheel
           path: dist/*.whl
           retention-days: 30
 
       - name: Upload sdist
         uses: actions/upload-artifact@v4
         with:
-          name: nvnodetop-sdist
+          name: verisync-sdist
           path: dist/*.tar.gz
           retention-days: 30
 
@@ -47,7 +47,7 @@ jobs:
           WHL=$(ls dist/*.whl)
           echo "### Install instructions" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Download the \`nvnodetop-wheel\` artifact, then run:" >> $GITHUB_STEP_SUMMARY
+          echo "Download the \`verisync-wheel\` artifact, then run:" >> $GITHUB_STEP_SUMMARY
           echo '```bash' >> $GITHUB_STEP_SUMMARY
           echo "pip install $(basename $WHL)" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
