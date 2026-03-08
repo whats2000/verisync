@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0]  2026-03-08
+
+### Added
+
+- **Disconnect guard** — automatically re-launches the script inside a `screen` or `tmux` session
+  when neither is already active, preventing transfer loss on SSH disconnects; re-attach instructions
+  are printed to the terminal and repeated in the session header
+- **Remote verification log** — SHA-256 verification results are now written to a timestamped
+  `.log` file on the remote host (`verify_<name>_<timestamp>.log`) containing a full per-file
+  OK / MISSING / MISMATCH report with expected vs. actual hashes for failures, plus a summary
+- Remote log path is surfaced in the final output as `<user>@<host>:<path>` for easy retrieval
+- "Press Enter to exit" prompt at end of run so the terminal window stays open when invoked
+  from a launcher
+
 ## [1.0.0]  2026-03-08
 
 ### Added

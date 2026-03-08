@@ -24,6 +24,26 @@
 
 set -euo pipefail
 
+# ── Disconnect guard: auto-wrap inside screen ─────────────────────────────────
+if [[ -z "${STY:-}" && -z "${TMUX:-}" ]]; then
+    SCRIPT_ABS="$(realpath "$0")"
+    SESSION="verisync_$$"
+    if command -v screen &>/dev/null; then
+        echo "[verisync] Wrapping inside screen session '${SESSION}' ..."
+        echo "[verisync] Re-attach if disconnected:  screen -r ${SESSION}"
+        sleep 1
+        exec screen -S "$SESSION" bash "$SCRIPT_ABS" "$@"
+    elif command -v tmux &>/dev/null; then
+        echo "[verisync] Wrapping inside tmux session '${SESSION}' ..."
+        echo "[verisync] Re-attach if disconnected:  tmux attach -t ${SESSION}"
+        sleep 1
+        exec tmux new-session -s "$SESSION" bash "$SCRIPT_ABS" "$@"
+    else
+        echo -e "\033[1;33m[!] screen/tmux not found — disconnect will kill the transfer.\033[0m"
+        echo ""
+    fi
+fi
+
 # ── Colours ──────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -91,6 +111,8 @@ hr
 echo -e "${NC}"
 echo " Mode : $([ "$USE_ZIP" = true ] && echo 'tar.gz archive + transfer' || echo 'rsync (direct, resumable)')"
 echo " Start: $(date)"
+[[ -n "${STY:-}" ]] && echo " Screen: ${STY}  (re-attach: screen -r ${STY##*.})"
+[[ -n "${TMUX:-}" ]] && echo " Tmux  : $(tmux display-message -p '#S' 2>/dev/null)  (re-attach: tmux attach -t $(tmux display-message -p '#S' 2>/dev/null))"
 hr
 echo ""
 
@@ -337,10 +359,21 @@ SRC_DIR="${SRC_DIR}"
 SRC_NAME="${SRC_NAME}"
 USE_ZIP="${USE_ZIP}"
 IS_FILE="${IS_FILE}"
+LOG_FILE="${REMOTE_DIR}/verify_${SRC_NAME}_$(date +%Y%m%d_%H%M%S).log"
 
 PASSED=0
 FAILED=0
 MISSING=0
+
+# Write log header
+{
+    echo "verisync — SHA-256 Verification Report"
+    echo "Generated : \$(date)"
+    echo "Manifest  : \$MANIFEST"
+    echo "Target dir: \$REMOTE_DIR"
+    echo "Source    : \$SRC_NAME"
+    echo "────────────────────────────────────────────────────────────"
+} > "\$LOG_FILE"
 
 while IFS='  ' read -r hash filepath; do
     # Map local absolute path → remote absolute path
@@ -356,6 +389,7 @@ while IFS='  ' read -r hash filepath; do
 
     if [ ! -f "\$remote_file" ]; then
         echo "  MISSING : \$remote_file"
+        echo "MISSING : \$remote_file" >> "\$LOG_FILE"
         (( MISSING++ )) || true
         (( FAILED++  )) || true
         continue
@@ -363,27 +397,48 @@ while IFS='  ' read -r hash filepath; do
 
     actual_hash=\$(sha256sum "\$remote_file" | awk '{print \$1}')
     if [ "\$hash" = "\$actual_hash" ]; then
+        echo "OK      : \$remote_file" >> "\$LOG_FILE"
         (( PASSED++ )) || true
     else
         echo "  MISMATCH: \$remote_file"
+        echo "MISMATCH: \$remote_file" >> "\$LOG_FILE"
+        echo "  expected: \$hash" >> "\$LOG_FILE"
+        echo "  actual  : \$actual_hash" >> "\$LOG_FILE"
         (( FAILED++ )) || true
     fi
 done < "\$MANIFEST"
+
+# Write log footer
+{
+    echo "────────────────────────────────────────────────────────────"
+    echo "Passed  : \$PASSED"
+    echo "Failed  : \$FAILED  (missing: \$MISSING)"
+    if [ \$FAILED -eq 0 ]; then
+        echo "Result  : SUCCESS — all checksums match"
+    else
+        echo "Result  : FAILED — see entries above"
+    fi
+    echo "────────────────────────────────────────────────────────────"
+} >> "\$LOG_FILE"
 
 echo ""
 echo "Verification complete"
 echo "  Passed : \$PASSED"
 echo "  Failed : \$FAILED  (missing: \$MISSING)"
+echo "  Log    : \$LOG_FILE"
 if [ \$FAILED -eq 0 ]; then
     echo "STATUS=OK"
 else
     echo "STATUS=FAIL"
 fi
+echo "LOGFILE=\$LOG_FILE"
 PYEOF
 )
 
 VERIFY_OUTPUT=$(ssh ${SSH_OPTS} "${REMOTE_USER}@${REMOTE_HOST}" "bash -s" <<< "$VERIFY_SCRIPT" 2>&1)
-echo "$VERIFY_OUTPUT" | sed 's/^/  /'
+echo "$VERIFY_OUTPUT" | grep -v '^LOGFILE=' | sed 's/^/  /'
+REMOTE_LOG=$(echo "$VERIFY_OUTPUT" | grep '^LOGFILE=' | cut -d= -f2-)
+echo ""
 echo ""
 
 TRANSFER_END=$(date +%s)
@@ -402,5 +457,8 @@ fi
 echo ""
 echo "  Elapsed  : $ELAPSED_STR"
 echo "  Finished : $(date)"
+[[ -n "${REMOTE_LOG:-}" ]] && echo "  Log file : ${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_LOG}"
 echo ""
 hr
+echo ""
+read -rp "  Press Enter to exit …" _
