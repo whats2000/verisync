@@ -1,0 +1,51 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "verisync"
+version = "1.0.0"
+description = "Interactive directory/file transfer with SHA-256 checksum verification over SSH"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "whats2000" }]
+keywords = ["rsync", "ssh", "checksum", "sha256", "file-transfer", "verification", "hpc"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: System :: Archiving :: Mirroring",
+    "Topic :: System :: Networking",
+    "Topic :: Utilities",
+]
+requires-python = ">=3.8"
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/whats2000/verisync"
+Repository = "https://github.com/whats2000/verisync"
+Issues = "https://github.com/whats2000/verisync/issues"
+Changelog = "https://github.com/whats2000/verisync/blob/main/CHANGELOG.md"
+
+[project.scripts]
+verisync = "verisync._launcher:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["verisync"]
+
+# Bundle the single root script into the installed package — no copy needed
+[tool.hatch.build.targets.wheel.force-include]
+"verisync.sh" = "verisync/verisync.sh"
+
+# Ensure the script is also included in the source distribution
+[tool.hatch.build.targets.sdist]
+include = [
+    "verisync/",
+    "verisync.sh",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+]
