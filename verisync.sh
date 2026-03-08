@@ -141,7 +141,7 @@ echo ""
 SRC_NAME=$(basename "$SRC_DIR")
 CHECKSUM_FILE="/tmp/transfer_${SRC_NAME}_$$.sha256"
 SSH_CTRL="/tmp/ssh_transfer_$$"
-SSH_OPTS="-o ControlMaster=auto -o ControlPath=${SSH_CTRL} -o ControlPersist=5m"
+SSH_OPTS="-o ControlMaster=auto -o ControlPath=${SSH_CTRL} -o ControlPersist=24h -o ServerAliveInterval=60 -o ServerAliveCountMax=10"
 trap 'ssh -o ControlPath="${SSH_CTRL}" -O exit "${REMOTE_USER}@${REMOTE_HOST}" 2>/dev/null; rm -f "$CHECKSUM_FILE" "${CHECKSUM_FILE%.sha256}.tar.gz" "$SSH_CTRL" 2>/dev/null' EXIT
 
 # ── Step 2 : Local size analysis ─────────────────────────────────────────────
@@ -234,18 +234,18 @@ if [ "$IS_FILE" = true ]; then
     printf "  [1/1] %s\n" "$(basename "$SRC_DIR")"
     sha256sum "$SRC_DIR" >> "$CHECKSUM_FILE"
 else
-    # Collect file list up-front (reuse SRC_FILES count already computed)
     HASH_IDX=0
     PAD=${#SRC_FILES}   # width of the total number for alignment
+    TERM_COLS=$(tput cols 2>/dev/null || echo 80)
     while IFS= read -r -d '' filepath; do
         (( HASH_IDX++ )) || true
-        # Overwrite the same terminal line
-        printf "\r  [%${PAD}d/%d] %s" \
-            "$HASH_IDX" "$SRC_FILES" \
-            "$(basename "$filepath")"
+        label=$(printf "  [%${PAD}d/%d] %s" "$HASH_IDX" "$SRC_FILES" "$(basename "$filepath")")
+        # Truncate to terminal width and pad with spaces to erase leftover chars
+        printf "\r%-${TERM_COLS}s" "${label:0:$TERM_COLS}"
         sha256sum "$filepath" >> "$CHECKSUM_FILE"
     done < <(find "$SRC_DIR" -type f -print0 | sort -z)
-    echo ""   # newline after the overwrite line
+    printf "\r%-${TERM_COLS}s\r" ""   # clear line
+    echo ""
 fi
 
 CHECKSUM_COUNT=$(wc -l < "$CHECKSUM_FILE")
