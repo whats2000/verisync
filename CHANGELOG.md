@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0]  2026-03-09
+
+### Added
+
+- **Batch mode** — support for transferring multiple sources in a single run with `--src` repeatable
+  and flexible destination mapping (1 shared dest for all sources, or 1:1 source-to-dest mapping)
+- **Auto-confirm option** (`-y`, `--yes`) — skip all interactive prompts for scripted/non-interactive usage
+- **Improved remote free space check** — validates existing directories by walking up to find the
+  deepest existing ancestor, preventing false "0 B free" reports for non-existent paths
+
+### Fixed
+
+- Script header comment corrected from `transfer.sh` to `verisync.sh`
+
 ## [1.1.0]  2026-03-08
 
 ### Added
