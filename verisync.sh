@@ -11,6 +11,7 @@
 #   -H, --host <host>    Remote SSH hostname / IP
 #   -d, --dest <path>    Remote destination (1 shared dest OR one per --src, e.g. -d x -d y)
 #       --zip            Pack each source into tar.gz before transferring (default: rsync)
+#   -y, --yes            Auto-confirm all prompts (non-interactive / scripted mode)
 #   -h, --help           Show this help and exit
 #
 # Destination rules:
@@ -81,6 +82,7 @@ human_bytes() {
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 USE_ZIP=false
+AUTO_YES=false
 SRC_DIRS=()       # array — supports multiple --src values
 DEST_DIRS=()      # array — 1 shared dest OR one per source
 REMOTE_USER=""
@@ -102,6 +104,8 @@ while [[ $# -gt 0 ]]; do
             DEST_DIRS+=("$2"); shift 2 ;;
         --zip)
             USE_ZIP=true; shift ;;
+        -y|--yes)
+            AUTO_YES=true; shift ;;
         -h|--help)
             grep '^#' "$0" | grep -v '^#!/' | sed 's/^# \?//'
             exit 0 ;;
@@ -117,6 +121,7 @@ echo "        Interactive Directory Transfer with Checksum Verify"
 hr
 echo -e "${NC}"
 echo " Mode : $([ "$USE_ZIP" = true ] && echo 'tar.gz archive + transfer' || echo 'rsync (direct, resumable)')"
+echo " Auto : $([ "$AUTO_YES" = true ] && echo 'YES — all confirmations skipped' || echo 'interactive')"
 echo " Start: $(date)"
 [[ -n "${STY:-}" ]] && echo " Screen: ${STY}  (re-attach: screen -r ${STY##*.})"
 [[ -n "${TMUX:-}" ]] && echo " Tmux  : $(tmux display-message -p '#S' 2>/dev/null)  (re-attach: tmux attach -t $(tmux display-message -p '#S' 2>/dev/null))"
@@ -252,8 +257,12 @@ if (( TOTAL_BYTES > LIMIT_BYTES )); then
     warn "Total size exceeds ${BOLD}100 GiB${NC}."
     warn "Please verify you have sufficient quota on the target server before continuing."
     echo ""
-    read -rp "  Continue anyway? [y/N] " CONFIRM_SIZE
-    [[ "$CONFIRM_SIZE" =~ ^[Yy]$ ]] || die "Aborted by user."
+    if [ "$AUTO_YES" = true ]; then
+        warn "--yes set: skipping confirmation."
+    else
+        read -rp "  Continue anyway? [y/N] " CONFIRM_SIZE
+        [[ "$CONFIRM_SIZE" =~ ^[Yy]$ ]] || die "Aborted by user."
+    fi
     echo ""
 fi
 
@@ -295,8 +304,12 @@ for _d in "${DEST_DIRS[@]}"; do
         warn "Could not determine free space for ${_d} — proceeding with caution."
     elif (( TOTAL_BYTES > _free_raw )); then
         warn "Total source size (${TOTAL_HUMAN}) may exceed free space ($(human_bytes "$_free_raw")) at ${_existing}!"
-        read -rp "  Continue anyway? [y/N] " CONFIRM_SPACE
-        [[ "$CONFIRM_SPACE" =~ ^[Yy]$ ]] || die "Aborted by user."
+        if [ "$AUTO_YES" = true ]; then
+            warn "--yes set: skipping confirmation."
+        else
+            read -rp "  Continue anyway? [y/N] " CONFIRM_SPACE
+            [[ "$CONFIRM_SPACE" =~ ^[Yy]$ ]] || die "Aborted by user."
+        fi
     fi
 done
 unset _CHECKED_MOUNTS
@@ -322,8 +335,12 @@ echo ""
 echo "    Total   : ${TOTAL_HUMAN}  (${TOTAL_FILES} files)"
 echo "    Mode    : $([ "$USE_ZIP" = true ] && echo 'zip then transfer' || echo 'rsync direct')"
 echo ""
-read -rp "  Start batch transfer now? [y/N] " CONFIRM_GO
-[[ "$CONFIRM_GO" =~ ^[Yy]$ ]] || die "Aborted by user."
+if [ "$AUTO_YES" = true ]; then
+    ok "--yes set: starting transfer automatically."
+else
+    read -rp "  Start batch transfer now? [y/N] " CONFIRM_GO
+    [[ "$CONFIRM_GO" =~ ^[Yy]$ ]] || die "Aborted by user."
+fi
 echo ""
 
 TRANSFER_START=$(date +%s)
@@ -606,4 +623,4 @@ echo "  Finished : $(date)"
 echo ""
 hr
 echo ""
-read -rp "  Press Enter to exit …" _
+[ "$AUTO_YES" = false ] && read -rp "  Press Enter to exit …" _
