@@ -1,8 +1,8 @@
 #!/bin/bash
-# transfer.sh — General-purpose interactive directory transfer with checksum verify
+# verisync.sh — General-purpose interactive directory transfer with checksum verify
 #
 # Usage:
-#   bash transfer.sh [OPTIONS]
+#   bash verisync.sh [OPTIONS]
 #
 # Options:
 #   -s, --src  <path>    Local source directory to transfer
