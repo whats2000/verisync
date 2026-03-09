@@ -269,25 +269,37 @@ fi
 ok "SSH connection OK"
 echo ""
 
-# Remote free space — check each unique destination parent
+# Remote free space — check each unique destination, walking up to the first
+# existing ancestor so df never receives a non-existent path (which would
+# return empty and incorrectly show 0 B free space).
 info "Checking remote disk space …"
-declare -A _CHECKED_PARENTS
+declare -A _CHECKED_MOUNTS
 for _d in "${DEST_DIRS[@]}"; do
-    _parent=$(dirname "$_d")
-    [ "${_CHECKED_PARENTS[$_parent]+set}" = "set" ] && continue
-    _CHECKED_PARENTS[$_parent]=1
+    # Find the deepest ancestor that already exists on the remote
+    _existing=$(ssh ${SSH_OPTS} "${REMOTE_USER}@${REMOTE_HOST}" "
+        p=\"${_d}\"
+        while [ -n \"\$p\" ] && [ \"\$p\" != '/' ]; do
+            [ -e \"\$p\" ] && { echo \"\$p\"; exit 0; }
+            p=\$(dirname \"\$p\")
+        done
+        echo '/'
+    ")
+    [ "${_CHECKED_MOUNTS[$_existing]+set}" = "set" ] && continue
+    _CHECKED_MOUNTS[$_existing]=1
     _free_raw=$(ssh ${SSH_OPTS} "${REMOTE_USER}@${REMOTE_HOST}" \
-        "df -B1 \"${_parent}\" 2>/dev/null | awk 'NR==2{print \$4}'" || echo "0")
+        "df -B1 \"${_existing}\" 2>/dev/null | awk 'NR==2{print \$4}'" || echo "0")
     _free_raw="${_free_raw//[^0-9]/}"
     _free_raw="${_free_raw:-0}"
-    printf "  %-40s free space: %s\n" "${_parent}" "$(human_bytes "$_free_raw")"
-    if (( _free_raw > 0 )) && (( TOTAL_BYTES > _free_raw )); then
-        warn "Total source size (${TOTAL_HUMAN}) may exceed free space on ${_parent} ($(human_bytes "$_free_raw"))!"
+    printf "  %-40s free space: %s  (df anchor: %s)\n" "${_d}" "$(human_bytes "$_free_raw")" "${_existing}"
+    if (( _free_raw == 0 )); then
+        warn "Could not determine free space for ${_d} — proceeding with caution."
+    elif (( TOTAL_BYTES > _free_raw )); then
+        warn "Total source size (${TOTAL_HUMAN}) may exceed free space ($(human_bytes "$_free_raw")) at ${_existing}!"
         read -rp "  Continue anyway? [y/N] " CONFIRM_SPACE
         [[ "$CONFIRM_SPACE" =~ ^[Yy]$ ]] || die "Aborted by user."
     fi
 done
-unset _CHECKED_PARENTS
+unset _CHECKED_MOUNTS
 
 # Create all remote destination directories
 info "Creating remote destination directories …"
