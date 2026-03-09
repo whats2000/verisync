@@ -1,9 +1,9 @@
 #!/bin/bash
-# verisync.sh — General-purpose interactive directory transfer with checksum verify
+# verisync — General-purpose interactive directory transfer with checksum verify
 #              Supports BATCH mode: transfer multiple sources in one SSH session.
 #
 # Usage:
-#   bash verisync.sh [OPTIONS]
+#   verisync [OPTIONS]
 #
 # Options:
 #   -s, --src  <path>    Local source to transfer (repeat for batch, e.g. -s a -s b)
@@ -31,6 +31,15 @@
 #   7. Print batch summary (pass / fail per source)
 
 set -euo pipefail
+
+# ── Early help: handle before screen/tmux wrap ───────────────────────────────
+for _arg in "$@"; do
+    if [[ "$_arg" == "-h" || "$_arg" == "--help" ]]; then
+        awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "$0"
+        exit 0
+    fi
+done
+unset _arg
 
 # ── Disconnect guard: auto-wrap inside screen ─────────────────────────────────
 if [[ -z "${STY:-}" && -z "${TMUX:-}" ]]; then
@@ -107,8 +116,7 @@ while [[ $# -gt 0 ]]; do
         -y|--yes)
             AUTO_YES=true; shift ;;
         -h|--help)
-            grep '^#' "$0" | grep -v '^#!/' | sed 's/^# \?//'
-            exit 0 ;;
+            awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "$0"; exit 0 ;;
         *) die "Unknown option: $1  (use --help for usage)" ;;
     esac
 done
