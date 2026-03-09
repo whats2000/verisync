@@ -34,12 +34,14 @@ Transfer files or directories to a remote server via rsync or tar.gz, then autom
 ## Features
 
 - 📁 **File and directory** — transfer a single file or an entire directory tree
+- 📦 **Batch mode** — transfer multiple sources in one run with flexible destination mapping
 - ✅ **End-to-end SHA-256 verification** — a checksum manifest is generated locally and re-verified remotely after transfer
 - ♻️ **rsync mode** (default) — incremental, resumable, and bandwidth-efficient
-- 🗜️ **Zip mode** (`--zip`) — packs source into a `.tar.gz`, uploads, and auto-extracts on the remote
+- 🗜️ **Zip mode** (`--zip`) — packs each source into a `.tar.gz`, uploads, and auto-extracts on the remote
 - 🔌 **SSH multiplexing** — a single SSH control socket is reused across all remote operations, including 2FA/password auth flows
-- 📏 **Space checks** — remote free disk space is measured before transfer; warns if source exceeds 100 GiB
+- 📏 **Space checks** — remote free disk space is measured before transfer; warns if total exceeds 100 GiB
 - 🖥️ **Interactive + CLI** — all parameters can be supplied as CLI flags or entered interactively at runtime
+- 🤖 **Auto-confirm** (`-y`) — skip prompts for scripted/non-interactive usage
 - 🕒 **Elapsed time** — reports total transfer and verification duration
 
 ---
@@ -95,11 +97,12 @@ verisync [OPTIONS]
 
 | Flag                  | Description                                               |
 | --------------------- | --------------------------------------------------------- |
-| `-s, --src <path>`    | Local source file or directory to transfer                |
+| `-s, --src <path>`    | Local source file or directory to transfer (repeat for batch) |
 | `-u, --user <user>`   | Remote SSH username                                       |
 | `-H, --host <host>`   | Remote SSH hostname or IP address                         |
-| `-d, --dest <path>`   | Remote destination directory                              |
-| `--zip`               | Pack source into `tar.gz` before transferring             |
+| `-d, --dest <path>`   | Remote destination (1 shared dest OR one per --src)       |
+| `--zip`               | Pack each source into `tar.gz` before transferring        |
+| `-y, --yes`           | Auto-confirm all prompts (non-interactive mode)           |
 | `-h, --help`          | Show usage and exit                                       |
 
 Any flag not supplied on the command line will be prompted interactively.
@@ -118,10 +121,28 @@ verisync
 verisync --src /data/project --user alice --host hpc.example.com --dest /scratch/alice/
 ```
 
-**Use zip mode for a single compressed upload**:
+**Batch mode** (multiple sources to shared destination):
+
+```bash
+verisync -s /data/file1.txt -s /data/dir2 -d /remote/shared/ -u alice -H hpc.example.com
+```
+
+**Batch mode** (1:1 source-to-destination mapping):
+
+```bash
+verisync -s /local/a -s /local/b -d /remote/x -d /remote/y -u alice -H hpc.example.com
+```
+
+**Use zip mode for compressed uploads**:
 
 ```bash
 verisync -s /data/project -u alice -H hpc.example.com -d /scratch/alice/ --zip
+```
+
+**Non-interactive mode** (auto-confirm all prompts):
+
+```bash
+verisync -s /data/project -u alice -H hpc.example.com -d /scratch/alice/ -y
 ```
 
 ---
@@ -130,11 +151,13 @@ verisync -s /data/project -u alice -H hpc.example.com -d /scratch/alice/ --zip
 
 | Step | Description                                                                |
 | ---- | -------------------------------------------------------------------------- |
-| 1    | Collect source path, remote user, host, and destination                    |
-| 2    | Measure local size; warn if > 100 GiB                                      |
-| 3    | Test SSH connectivity; check remote free disk space                        |
-| 4    | Generate SHA-256 checksum manifest for every file in the source            |
-| 5    | Transfer files + manifest via rsync (or tar.gz); verify checksums remotely |
+| 1    | Collect source(s), destination(s), remote user, and host                   |
+| 2    | Measure total local size; warn if > 100 GiB                               |
+| 3    | Test SSH connectivity; check remote free disk space for each destination  |
+| 4    | For each source: generate SHA-256 checksum manifest                       |
+| 5    | For each source: transfer files + manifest via rsync (or tar.gz)          |
+| 6    | For each source: verify checksums remotely                                |
+| 7    | Print batch summary (pass/fail per source)                                |
 
 ---
 
@@ -144,7 +167,7 @@ verisync -s /data/project -u alice -H hpc.example.com -d /scratch/alice/ --zip
 | ------------------- | ----------------------- | ------------------------- |
 | Resumable?          | Yes                     | No                        |
 | Incremental?        | Yes                     | No                        |
-| Single archive?     | No                      | Yes                       |
+| Single archive?     | No                      | Yes (per source)          |
 | Compression         | `-z` (inline)           | `gzip` (pre-compressed)   |
 | Remote extraction   | Not needed              | Auto-extracted via `tar`  |
 
