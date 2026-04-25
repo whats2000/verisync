@@ -3,7 +3,11 @@
 #              Supports BATCH mode: transfer multiple sources in one SSH session.
 #
 # Usage:
-#   verisync [OPTIONS]
+#   verisync [OPTIONS]            Start a new transfer
+#   verisync ls                   List active verisync sessions across login nodes
+#   verisync -r | --reattach      Pick an active session and reattach
+#                                 (if it's on another login node, you'll be SSH'd
+#                                 there; re-run `verisync -r` after 2FA login)
 #
 # Options:
 #   -s, --src  <path>    Local source to transfer (repeat for batch, e.g. -s a -s b)
@@ -32,6 +36,144 @@
 
 set -euo pipefail
 
+# ── Session marker (kept in shared $HOME so any login node can list them) ────
+MARKER_DIR="$HOME/.verisync/sessions"
+mkdir -p "$MARKER_DIR" 2>/dev/null
+chmod 700 "$MARKER_DIR" 2>/dev/null
+
+_marker_write() {
+    # _marker_write <session> <wrapper>
+    local session="$1" wrapper="$2"
+    local f="$MARKER_DIR/$session"
+    cat > "$f" <<EOF
+SESSION=$session
+LOGIN_NODE=$(hostname -s)
+START_TS=$(date +%s)
+WRAPPER=$wrapper
+EOF
+    chmod 600 "$f"
+}
+
+_marker_remove() {
+    [ -n "${VERISYNC_MARKER:-}" ] && rm -f "$VERISYNC_MARKER" 2>/dev/null || true
+}
+
+_verisync_list_or_attach() {
+    # Mode: "ls" -> only print table, never attach.
+    # Mode: "-r" -> print table, then prompt to reattach.
+    local mode="$1"
+    shopt -s nullglob
+    local files=("$MARKER_DIR"/*)
+    shopt -u nullglob
+    if [ ${#files[@]} -eq 0 ]; then
+        echo "No verisync sessions found in $MARKER_DIR"
+        return 0
+    fi
+
+    printf "  %3s  %-32s  %-12s  %-10s  %s\n" "#" "SESSION" "LOGIN_NODE" "AGE" "STATUS"
+    printf "  %3s  %-32s  %-12s  %-10s  %s\n" "---" "--------------------------------" "------------" "----------" "------"
+
+    local i=0
+    local -a vs_session=() vs_node=() vs_status=()
+    local now=$(date +%s)
+    for f in "${files[@]}"; do
+        unset SESSION LOGIN_NODE START_TS WRAPPER
+        # shellcheck disable=SC1090
+        source "$f"
+        local age_s=$(( now - ${START_TS:-0} ))
+        local age_h
+        age_h=$(printf '%dh%02dm' $((age_s/3600)) $(((age_s%3600)/60)))
+        local status
+        if [ "${LOGIN_NODE:-}" = "$(hostname -s)" ]; then
+            if screen -ls 2>/dev/null | grep -q "$SESSION"; then
+                status="alive"
+            else
+                status="stale"
+            fi
+        else
+            status="remote"
+        fi
+        i=$((i+1))
+        vs_session[$i]="${SESSION:-?}"
+        vs_node[$i]="${LOGIN_NODE:-?}"
+        vs_status[$i]="$status"
+        printf "  %3d  %-32s  %-12s  %-10s  %s\n" "$i" "${SESSION:-?}" "${LOGIN_NODE:-?}" "$age_h" "$status"
+    done
+    echo ""
+
+    # ls only: just print and bail
+    [ "$mode" = "ls" ] && return 0
+
+    [ ${#vs_session[@]} -eq 0 ] && return 0
+
+    local choice
+    if [ ${#vs_session[@]} -eq 1 ]; then
+        echo "  Only one session — selecting #1 automatically."
+        choice=1
+    else
+        read -rp "  Reattach to # (Enter or q to quit, p to prune stale): " choice
+    fi
+
+    if [[ "$choice" == "p" ]]; then
+        local pruned=0
+        for j in "${!vs_session[@]}"; do
+            if [ "${vs_status[$j]}" = "stale" ]; then
+                rm -f "$MARKER_DIR/${vs_session[$j]}" && {
+                    echo "  pruned: ${vs_session[$j]}"
+                    pruned=$((pruned+1))
+                }
+            fi
+        done
+        echo "  $pruned stale marker(s) removed."
+        return 0
+    fi
+    [[ -z "$choice" || "$choice" == "q" ]] && return 0
+    if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ -z "${vs_session[$choice]:-}" ]; then
+        echo "  Invalid selection."
+        return 1
+    fi
+
+    local sess="${vs_session[$choice]}"
+    local node="${vs_node[$choice]}"
+    local stat="${vs_status[$choice]}"
+
+    if [ "$stat" = "stale" ]; then
+        echo "  Session looks dead (no screen on this node) — removing marker."
+        rm -f "$MARKER_DIR/$sess"
+        return 0
+    fi
+
+    if [ "$node" = "$(hostname -s)" ]; then
+        echo "  Reattaching to $sess on $node …"
+        exec screen -r "$sess"
+    else
+        # Cross-node: ssh user over to that login node (will trigger 2FA).
+        # User then re-runs `verisync -r` there to actually attach.
+        echo ""
+        echo "  Session $sess is on a different login node ($node)."
+        echo "  Switching shell to $node now (2FA prompt likely). Once logged in:"
+        echo "      verisync -r"
+        echo "  to pick the session again and attach."
+        echo ""
+        local target="${USER}@${node}"
+        # Try .nchc.org.tw FQDN if short hostname doesn't resolve
+        if ! getent hosts "$node" >/dev/null 2>&1; then
+            target="${USER}@${node}.nchc.org.tw"
+        fi
+        exec ssh -t "$target"
+    fi
+}
+
+# ── Early dispatch: ls / reattach (handle before screen/tmux wrap) ──────────
+case "${1:-}" in
+    ls|--list)
+        _verisync_list_or_attach ls
+        exit 0 ;;
+    -r|--reattach)
+        _verisync_list_or_attach -r
+        exit 0 ;;
+esac
+
 # ── Early help: handle before screen/tmux wrap ───────────────────────────────
 for _arg in "$@"; do
     if [[ "$_arg" == "-h" || "$_arg" == "--help" ]]; then
@@ -44,15 +186,22 @@ unset _arg
 # ── Disconnect guard: auto-wrap inside screen ─────────────────────────────────
 if [[ -z "${STY:-}" && -z "${TMUX:-}" ]]; then
     SCRIPT_ABS="$(realpath "$0")"
-    SESSION="verisync_$$"
+    # Include hostname in session name so two login nodes can't clash on PIDs
+    SESSION="verisync_$(hostname -s)_$$"
     if command -v screen &>/dev/null; then
-        echo "[verisync] Wrapping inside screen session '${SESSION}' ..."
-        echo "[verisync] Re-attach if disconnected:  screen -r ${SESSION}"
+        _marker_write "$SESSION" "screen"
+        export VERISYNC_MARKER="$MARKER_DIR/$SESSION"
+        echo "[verisync] Wrapping inside screen session '${SESSION}' on $(hostname -s) ..."
+        echo "[verisync] Re-attach (this node):  screen -r ${SESSION}"
+        echo "[verisync] List/find from any login node:  verisync ls   /   verisync -r"
         sleep 1
         exec screen -S "$SESSION" bash "$SCRIPT_ABS" "$@"
     elif command -v tmux &>/dev/null; then
-        echo "[verisync] Wrapping inside tmux session '${SESSION}' ..."
-        echo "[verisync] Re-attach if disconnected:  tmux attach -t ${SESSION}"
+        _marker_write "$SESSION" "tmux"
+        export VERISYNC_MARKER="$MARKER_DIR/$SESSION"
+        echo "[verisync] Wrapping inside tmux session '${SESSION}' on $(hostname -s) ..."
+        echo "[verisync] Re-attach (this node):  tmux attach -t ${SESSION}"
+        echo "[verisync] List/find from any login node:  verisync ls   /   verisync -r"
         sleep 1
         exec tmux new-session -s "$SESSION" bash "$SCRIPT_ABS" "$@"
     else
@@ -60,6 +209,10 @@ if [[ -z "${STY:-}" && -z "${TMUX:-}" ]]; then
         echo ""
     fi
 fi
+
+# Inside the wrapped shell: clean up our marker on any exit (success/fail/Ctrl-C).
+# Note: this trap is augmented (not replaced) by the SSH-cleanup trap later.
+trap '_marker_remove' EXIT
 
 # ── Colours ──────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -231,7 +384,7 @@ echo ""
 # SSH multiplexing — shared across the whole batch
 SSH_CTRL="/tmp/ssh_transfer_$$"
 SSH_OPTS="-o ControlMaster=auto -o ControlPath=${SSH_CTRL} -o ControlPersist=24h -o ServerAliveInterval=60 -o ServerAliveCountMax=10"
-trap 'ssh -o ControlPath="${SSH_CTRL}" -O exit "${REMOTE_USER}@${REMOTE_HOST}" 2>/dev/null; rm -f /tmp/transfer_*_$$.sha256 /tmp/transfer_*_$$.tar.gz "$SSH_CTRL" 2>/dev/null' EXIT
+trap '_marker_remove; ssh -o ControlPath="${SSH_CTRL}" -O exit "${REMOTE_USER}@${REMOTE_HOST}" 2>/dev/null; rm -f /tmp/transfer_*_$$.sha256 /tmp/transfer_*_$$.tar.gz "$SSH_CTRL" 2>/dev/null' EXIT
 
 # ── Step 2 : Aggregate local size analysis ────────────────────────────────────
 echo -e "${BOLD}[Step 2/6] Measuring Total Source Size${NC}"

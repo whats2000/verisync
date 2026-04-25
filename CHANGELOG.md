@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Session discovery & cross-node reattach** — `verisync ls` lists active sessions across login
+  nodes (using shared markers in `$HOME/.verisync/sessions`), and `verisync -r` / `--reattach`
+  picks a session and reattaches; if the session lives on another login node, the user is SSH'd
+  there to re-run `verisync -r` after 2FA
+- Session names now include the short hostname (`verisync_<host>_<pid>`) to avoid PID collisions
+  between login nodes
+- Stale-marker pruning (`p` option) and auto-cleanup of the session marker on exit
+
 ## [1.2.1]  2026-03-09
 
 ### Fixed
