@@ -147,20 +147,20 @@ _verisync_list_or_attach() {
         echo "  Reattaching to $sess on $node …"
         exec screen -r "$sess"
     else
-        # Cross-node: ssh user over to that login node (will trigger 2FA).
-        # User then re-runs `verisync -r` there to actually attach.
+        # Cross-node: ssh to that login node (likely triggers 2FA), then auto
+        # `screen -r <session>` over there. If the screen session is gone by
+        # the time we get there, drop to a login shell so the user isn't kicked.
         echo ""
         echo "  Session $sess is on a different login node ($node)."
-        echo "  Switching shell to $node now (2FA prompt likely). Once logged in:"
-        echo "      verisync -r"
-        echo "  to pick the session again and attach."
+        echo "  SSHing to $node and reattaching (2FA prompt likely)…"
         echo ""
         local target="${USER}@${node}"
         # Try .nchc.org.tw FQDN if short hostname doesn't resolve
         if ! getent hosts "$node" >/dev/null 2>&1; then
             target="${USER}@${node}.nchc.org.tw"
         fi
-        exec ssh -t "$target"
+        # screen -r exits non-zero if the session is gone → fall back to login shell.
+        exec ssh -t "$target" "screen -r '$sess' || { echo '[verisync] session not found on $node; dropping to shell.'; exec bash -l; }"
     fi
 }
 

@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Session names now include the short hostname (`verisync_<host>_<pid>`) to avoid PID collisions
   between login nodes
 - Stale-marker pruning (`p` option) and auto-cleanup of the session marker on exit
+- **One-step cross-node reattach** — when the chosen session lives on another login node,
+  `verisync -r` now SSHes there and runs `screen -r <session>` automatically; if the
+  session has disappeared in the meantime, it falls back to a login shell instead of
+  exiting
 
 ## [1.2.1]  2026-03-09
 
