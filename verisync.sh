@@ -179,8 +179,9 @@ _check_duplicate_session() {
     done
 
     if [ "${AUTO_YES:-false}" = true ]; then
-        warn "--yes set: aborting current transfer to avoid clobbering."
-        die "Aborted (duplicate pairs detected)."
+        warn "--yes auto-confirms safe paths only; a duplicate-pair conflict is an error."
+        warn "Re-run WITHOUT --yes to choose interactively: (a)bort / (k)ill conflicting / (i)gnore."
+        die "Aborted (duplicate pairs detected — see list above)."
     fi
 
     local prompt
@@ -387,44 +388,16 @@ if [ "${VERISYNC_TEST_LIB:-0}" = "1" ]; then
     return 0 2>/dev/null || exit 0
 fi
 
-# ── Disconnect guard: auto-wrap inside screen ─────────────────────────────────
-if [[ -z "${STY:-}" && -z "${TMUX:-}" ]]; then
-    SCRIPT_ABS="$(realpath "$0")"
-    # Include hostname in session name so two login nodes can't clash on PIDs
-    SESSION="verisync_$(hostname -s)_$$"
-    if command -v screen &>/dev/null; then
-        _marker_write "$SESSION" "screen"
-        export VERISYNC_MARKER="$MARKER_DIR/$SESSION"
-        echo "[verisync] Wrapping inside screen session '${SESSION}' on $(hostname -s) ..."
-        echo "[verisync] Re-attach (this node):  screen -r ${SESSION}"
-        echo "[verisync] List/find from any login node:  verisync ls   /   verisync -r"
-        sleep 1
-        exec screen -S "$SESSION" bash "$SCRIPT_ABS" "$@"
-    elif command -v tmux &>/dev/null; then
-        _marker_write "$SESSION" "tmux"
-        export VERISYNC_MARKER="$MARKER_DIR/$SESSION"
-        echo "[verisync] Wrapping inside tmux session '${SESSION}' on $(hostname -s) ..."
-        echo "[verisync] Re-attach (this node):  tmux attach -t ${SESSION}"
-        echo "[verisync] List/find from any login node:  verisync ls   /   verisync -r"
-        sleep 1
-        exec tmux new-session -s "$SESSION" bash "$SCRIPT_ABS" "$@"
-    else
-        echo -e "\033[1;33m[!] screen/tmux not found — disconnect will kill the transfer.\033[0m"
-        echo ""
-    fi
-fi
-
-# Inside the wrapped shell: clean up our marker on any exit (success/fail/Ctrl-C).
-# Note: this trap is augmented (not replaced) by the SSH-cleanup trap later.
-trap '_marker_remove' EXIT
-
-# ── Argument parsing ──────────────────────────────────────────────────────────
+# ── Argument parsing (BEFORE screen wrap so any error reaches the user) ──────
 USE_ZIP=false
 AUTO_YES=false
 SRC_DIRS=()       # array — supports multiple --src values
 DEST_DIRS=()      # array — 1 shared dest OR one per source
 REMOTE_USER=""
 REMOTE_HOST=""
+
+# Save original args so we can pass them through the screen wrap unmodified.
+_VERISYNC_ARGV=("$@")
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -449,6 +422,100 @@ while [[ $# -gt 0 ]]; do
         *) die "Unknown option: $1  (use --help for usage)" ;;
     esac
 done
+
+# ── Pre-wrap duplicate-session check ─────────────────────────────────────────
+# If the user gave full config via CLI, run the duplicate-pair check NOW —
+# before we go into screen — so the abort message (especially under -y) is
+# visible on the user's actual terminal instead of getting eaten by a
+# terminating screen session. Interactive runs (some args missing) defer
+# the check until after Step 1 inside the wrap.
+if [ ${#SRC_DIRS[@]} -gt 0 ] && [ ${#DEST_DIRS[@]} -gt 0 ] \
+   && [ -n "$REMOTE_USER" ] && [ -n "$REMOTE_HOST" ] \
+   && [ "${VERISYNC_DUP_CHECKED:-0}" != "1" ]; then
+
+    # Normalize paths (mirror Step 1's logic so the dup check sees identical
+    # strings to what Step 1 would later produce).
+    _norm=()
+    for _p in "${SRC_DIRS[@]}"; do
+        _p="${_p%/}"
+        _p="${_p/#\~/$HOME}"
+        { [ -d "$_p" ] || [ -f "$_p" ]; } || die "Source not found: $_p"
+        _norm+=("$_p")
+    done
+    SRC_DIRS=("${_norm[@]}")
+
+    _dnorm=()
+    for _p in "${DEST_DIRS[@]}"; do _dnorm+=("${_p%/}"); done
+    DEST_DIRS=("${_dnorm[@]}")
+
+    # Broadcast 1 shared dest -> N, or validate count match.
+    if [ ${#DEST_DIRS[@]} -eq 1 ] && [ ${#SRC_DIRS[@]} -gt 1 ]; then
+        _shared="${DEST_DIRS[0]}"
+        DEST_DIRS=()
+        for _i in $(seq 1 ${#SRC_DIRS[@]}); do DEST_DIRS+=("$_shared"); done
+    elif [ ${#DEST_DIRS[@]} -ne ${#SRC_DIRS[@]} ]; then
+        die "Destination count (${#DEST_DIRS[@]}) must be 1 (shared) or equal to source count (${#SRC_DIRS[@]})."
+    fi
+
+    # Build sorted (src, dst) fingerprint for dup check.
+    _PAIRS=()
+    for _i in "${!SRC_DIRS[@]}"; do
+        _PAIRS+=("${SRC_DIRS[$_i]}"$'\x1f'"${DEST_DIRS[$_i]}")
+    done
+    IFS=$'\n' read -r -d '' -a _PAIRS_SORTED \
+        < <(printf '%s\n' "${_PAIRS[@]}" | sort && printf '\0') || true
+    _SOURCES_FP=""; _DESTS_FP=""
+    for _p in "${_PAIRS_SORTED[@]}"; do
+        _SOURCES_FP+="${_p%$'\x1f'*}"$'\x1f'
+        _DESTS_FP+="${_p#*$'\x1f'}"$'\x1f'
+    done
+    _SOURCES_FP="${_SOURCES_FP%$'\x1f'}"
+    _DESTS_FP="${_DESTS_FP%$'\x1f'}"
+    _REMOTE_FP="${REMOTE_USER}@${REMOTE_HOST}"
+    # Placeholder session name — our real marker doesn't exist yet.
+    _PLACEHOLDER_SESS="verisync_pending_$(hostname -s)_$$"
+
+    # Runs interactively or, under -y + conflict, dies with a clear message.
+    _check_duplicate_session "$_PLACEHOLDER_SESS" "$_REMOTE_FP" \
+        "$_SOURCES_FP" "$_DESTS_FP"
+
+    # Tell the wrapped (post-screen) script to skip its own dup check.
+    export VERISYNC_DUP_CHECKED=1
+
+    unset _norm _dnorm _PAIRS _PAIRS_SORTED _SOURCES_FP _DESTS_FP \
+          _REMOTE_FP _PLACEHOLDER_SESS _shared _p _i
+fi
+
+# ── Disconnect guard: auto-wrap inside screen ─────────────────────────────────
+if [[ -z "${STY:-}" && -z "${TMUX:-}" ]]; then
+    SCRIPT_ABS="$(realpath "$0")"
+    # Include hostname in session name so two login nodes can't clash on PIDs
+    SESSION="verisync_$(hostname -s)_$$"
+    if command -v screen &>/dev/null; then
+        _marker_write "$SESSION" "screen"
+        export VERISYNC_MARKER="$MARKER_DIR/$SESSION"
+        echo "[verisync] Wrapping inside screen session '${SESSION}' on $(hostname -s) ..."
+        echo "[verisync] Re-attach (this node):  screen -r ${SESSION}"
+        echo "[verisync] List/find from any login node:  verisync ls   /   verisync -r"
+        sleep 1
+        exec screen -S "$SESSION" bash "$SCRIPT_ABS" "${_VERISYNC_ARGV[@]}"
+    elif command -v tmux &>/dev/null; then
+        _marker_write "$SESSION" "tmux"
+        export VERISYNC_MARKER="$MARKER_DIR/$SESSION"
+        echo "[verisync] Wrapping inside tmux session '${SESSION}' on $(hostname -s) ..."
+        echo "[verisync] Re-attach (this node):  tmux attach -t ${SESSION}"
+        echo "[verisync] List/find from any login node:  verisync ls   /   verisync -r"
+        sleep 1
+        exec tmux new-session -s "$SESSION" bash "$SCRIPT_ABS" "${_VERISYNC_ARGV[@]}"
+    else
+        echo -e "\033[1;33m[!] screen/tmux not found — disconnect will kill the transfer.\033[0m"
+        echo ""
+    fi
+fi
+
+# Inside the wrapped shell: clean up our marker on any exit (success/fail/Ctrl-C).
+# Note: this trap is augmented (not replaced) by the SSH-cleanup trap later.
+trap '_marker_remove' EXIT
 
 # ── Banner ────────────────────────────────────────────────────────────────────
 clear

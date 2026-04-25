@@ -29,6 +29,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   duplicate aborts to avoid clobbering a running transfer
 - Per-pair check means partially overlapping batches (e.g. one shared source out of
   several) are now flagged instead of slipping past whole-batch equality
+- **Pre-wrap duplicate check** — when full config is provided on the CLI, the
+  duplicate-pair check now runs *before* the screen/tmux wrap so abort messages
+  (especially under `--yes`) reach the user's terminal instead of being eaten
+  by a dying screen session; interactive runs still defer the check until after
+  Step 1 inside the wrap
+
+### Changed
+
+- `--yes` no longer silently aborts on a duplicate-pair conflict — it now prints a
+  clear "auto-confirms safe paths only" message pointing at the conflict list and
+  suggests re-running interactively to choose abort/kill/ignore
 - Session markers now record `REMOTE`, `SOURCES`, and `DESTS` (NUL-safe via US `\x1f`
   separator) so duplicate detection works across nodes
 
