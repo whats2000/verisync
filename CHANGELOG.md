@@ -20,6 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `verisync -r` now SSHes there and runs `screen -r <session>` automatically; if the
   session has disappeared in the meantime, it falls back to a login shell instead of
   exiting
+- **Duplicate-session detection** — before starting a transfer, verisync compares the
+  remote target and (sorted) source/destination set against active session markers
+  across login nodes; if a match is found the user can abort, kill the other session
+  (when on the same node), or ignore and continue. With `-y`/`--yes` a duplicate
+  always aborts to avoid clobbering a running transfer
+- Session markers now record `REMOTE`, `SOURCES`, and `DESTS` (NUL-safe via US `\x1f`
+  separator) so duplicate detection works across nodes
 
 ## [1.2.1]  2026-03-09
 

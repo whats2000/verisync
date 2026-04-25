@@ -42,20 +42,127 @@ mkdir -p "$MARKER_DIR" 2>/dev/null
 chmod 700 "$MARKER_DIR" 2>/dev/null
 
 _marker_write() {
-    # _marker_write <session> <wrapper>
+    # _marker_write <session> <wrapper> [remote] [sources_joined] [dests_joined]
+    # Sources/dests are joined with $'\x1f' (Unit Separator) so spaces in paths are safe.
     local session="$1" wrapper="$2"
+    local remote="${3:-}" sources="${4:-}" dests="${5:-}"
     local f="$MARKER_DIR/$session"
     cat > "$f" <<EOF
 SESSION=$session
 LOGIN_NODE=$(hostname -s)
 START_TS=$(date +%s)
 WRAPPER=$wrapper
+REMOTE=$remote
+SOURCES=$sources
+DESTS=$dests
 EOF
     chmod 600 "$f"
 }
 
+_marker_update_config() {
+    # Re-write our own marker with config fields after Step 1 has parsed them.
+    [ -z "${VERISYNC_MARKER:-}" ] && return 0
+    local remote="$1" sources="$2" dests="$3"
+    # Preserve original SESSION/WRAPPER/START_TS by reading them back first.
+    local SESSION_KEEP="" WRAPPER_KEEP="" START_TS_KEEP=""
+    if [ -f "$VERISYNC_MARKER" ]; then
+        # shellcheck disable=SC1090
+        ( source "$VERISYNC_MARKER"; \
+          echo "$SESSION"; echo "$WRAPPER"; echo "$START_TS" ) > /tmp/.verisync_kv_$$
+        { read -r SESSION_KEEP; read -r WRAPPER_KEEP; read -r START_TS_KEEP; } < /tmp/.verisync_kv_$$
+        rm -f /tmp/.verisync_kv_$$
+    fi
+    cat > "$VERISYNC_MARKER" <<EOF
+SESSION=$SESSION_KEEP
+LOGIN_NODE=$(hostname -s)
+START_TS=$START_TS_KEEP
+WRAPPER=$WRAPPER_KEEP
+REMOTE=$remote
+SOURCES=$sources
+DESTS=$dests
+EOF
+    chmod 600 "$VERISYNC_MARKER"
+}
+
 _marker_remove() {
     [ -n "${VERISYNC_MARKER:-}" ] && rm -f "$VERISYNC_MARKER" 2>/dev/null || true
+}
+
+_join_us() {
+    # Join positional args with US (\x1f) — safe because Unix paths can't contain it.
+    local IFS=$'\x1f'
+    echo "$*"
+}
+
+_check_duplicate_session() {
+    # _check_duplicate_session <my_session_name> <remote> <sources_joined> <dests_joined>
+    # Returns 0 if no duplicate, otherwise prompts user.
+    local my_sess="$1" my_remote="$2" my_sources="$3" my_dests="$4"
+    shopt -s nullglob
+    local files=("$MARKER_DIR"/*)
+    shopt -u nullglob
+    local match_session="" match_node=""
+    for f in "${files[@]}"; do
+        [ "$(basename "$f")" = "$my_sess" ] && continue
+        unset SESSION LOGIN_NODE START_TS WRAPPER REMOTE SOURCES DESTS
+        # shellcheck disable=SC1090
+        source "$f" 2>/dev/null || continue
+        # Skip if config not yet filled (other session still in Step 1)
+        [ -z "${SOURCES:-}" ] && continue
+        # Skip stale (no screen on its own node, can only check if same node)
+        if [ "${LOGIN_NODE:-}" = "$(hostname -s)" ] \
+           && ! screen -ls 2>/dev/null | grep -q "$SESSION"; then
+            continue
+        fi
+        if [ "${REMOTE:-}" = "$my_remote" ] \
+           && [ "${SOURCES:-}" = "$my_sources" ] \
+           && [ "${DESTS:-}" = "$my_dests" ]; then
+            match_session="$SESSION"
+            match_node="$LOGIN_NODE"
+            break
+        fi
+    done
+
+    [ -z "$match_session" ] && return 0
+
+    echo ""
+    warn "Duplicate transfer already running:"
+    warn "  session  : $match_session"
+    warn "  on node  : $match_node"
+    warn "  same remote=$my_remote, same sources, same destinations"
+    echo ""
+
+    if [ "${AUTO_YES:-false}" = true ]; then
+        warn "--yes set: aborting current transfer to avoid clobbering the running one."
+        die "Aborted (duplicate session $match_session already running on $match_node)."
+    fi
+
+    local prompt
+    if [ "$match_node" = "$(hostname -s)" ]; then
+        prompt="  Choose: (a)bort current / (k)ill other / (i)gnore and continue [a/k/i]: "
+    else
+        prompt="  Other session is on $match_node — can't kill it from here. Choose: (a)bort current / (i)gnore and continue [a/i]: "
+    fi
+    local choice
+    read -rp "$prompt" choice
+    case "$choice" in
+        a|A|"")
+            die "Aborted by user (duplicate of $match_session)." ;;
+        k|K)
+            if [ "$match_node" != "$(hostname -s)" ]; then
+                die "Cannot kill remote session from here. Aborting."
+            fi
+            info "Killing screen session $match_session …"
+            screen -X -S "$match_session" quit 2>/dev/null || warn "screen -X quit failed; you may need to clean up manually."
+            rm -f "$MARKER_DIR/$match_session"
+            ok "Other session terminated. Continuing with current transfer."
+            ;;
+        i|I)
+            warn "Ignoring duplicate; proceeding (may clobber the other transfer)." ;;
+        *)
+            die "Invalid choice; aborting." ;;
+    esac
+    return 0
 }
 
 _verisync_list_or_attach() {
@@ -183,6 +290,42 @@ for _arg in "$@"; do
 done
 unset _arg
 
+# ── Colours ──────────────────────────────────────────────────────────────────
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+hr()    { printf '%s\n' "$(printf '─%.0s' {1..60})"; }
+info()  { echo -e "${BLUE}[•]${NC} $*"; }
+ok()    { echo -e "${GREEN}[✓]${NC} $*"; }
+warn()  { echo -e "${YELLOW}[!]${NC} $*"; }
+error() { echo -e "${RED}[✗]${NC} $*" >&2; }
+die()   { error "$*"; exit 1; }
+
+# Pretty-print bytes as human-readable (works without numfmt)
+human_bytes() {
+    local b=$1
+    if   (( b >= 1099511627776 )); then printf "%.1f TiB" "$(echo "scale=1; $b/1099511627776" | bc)"
+    elif (( b >= 1073741824 ))   ; then printf "%.1f GiB" "$(echo "scale=1; $b/1073741824"    | bc)"
+    elif (( b >= 1048576 ))      ; then printf "%.1f MiB" "$(echo "scale=1; $b/1048576"        | bc)"
+    elif (( b >= 1024 ))         ; then printf "%.1f KiB" "$(echo "scale=1; $b/1024"           | bc)"
+    else printf "%d B" "$b"
+    fi
+}
+
+# Test hook: when sourced (not executed) with VERISYNC_TEST_LIB=1, stop here
+# so test code can call internal functions (e.g. _check_duplicate_session)
+# without running the main transfer flow. All helpers / marker fns are defined
+# above this point so callers can use them.
+if [ "${VERISYNC_TEST_LIB:-0}" = "1" ]; then
+    return 0 2>/dev/null || exit 0
+fi
+
 # ── Disconnect guard: auto-wrap inside screen ─────────────────────────────────
 if [[ -z "${STY:-}" && -z "${TMUX:-}" ]]; then
     SCRIPT_ABS="$(realpath "$0")"
@@ -213,34 +356,6 @@ fi
 # Inside the wrapped shell: clean up our marker on any exit (success/fail/Ctrl-C).
 # Note: this trap is augmented (not replaced) by the SSH-cleanup trap later.
 trap '_marker_remove' EXIT
-
-# ── Colours ──────────────────────────────────────────────────────────────────
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-BOLD='\033[1m'
-NC='\033[0m'
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-hr()    { printf '%s\n' "$(printf '─%.0s' {1..60})"; }
-info()  { echo -e "${BLUE}[•]${NC} $*"; }
-ok()    { echo -e "${GREEN}[✓]${NC} $*"; }
-warn()  { echo -e "${YELLOW}[!]${NC} $*"; }
-error() { echo -e "${RED}[✗]${NC} $*" >&2; }
-die()   { error "$*"; exit 1; }
-
-# Pretty-print bytes as human-readable (works without numfmt)
-human_bytes() {
-    local b=$1
-    if   (( b >= 1099511627776 )); then printf "%.1f TiB" "$(echo "scale=1; $b/1099511627776" | bc)"
-    elif (( b >= 1073741824 ))   ; then printf "%.1f GiB" "$(echo "scale=1; $b/1073741824"    | bc)"
-    elif (( b >= 1048576 ))      ; then printf "%.1f MiB" "$(echo "scale=1; $b/1048576"        | bc)"
-    elif (( b >= 1024 ))         ; then printf "%.1f KiB" "$(echo "scale=1; $b/1024"           | bc)"
-    else printf "%d B" "$b"
-    fi
-}
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 USE_ZIP=false
@@ -380,6 +495,33 @@ for _i in "${!SRC_DIRS[@]}"; do
     printf "    %-45s → %s@%s:%s\n" "${SRC_DIRS[$_i]}" "$REMOTE_USER" "$REMOTE_HOST" "${DEST_DIRS[$_i]}"
 done
 echo ""
+
+# Update our marker with parsed config so other invocations can detect duplicates
+_REMOTE_FP="${REMOTE_USER}@${REMOTE_HOST}"
+# Sort sources/dests as ordered pairs so order doesn't matter for dup detection.
+# Build "src\x1fdest" lines, sort, then re-flatten.
+_PAIRS=()
+for _i in "${!SRC_DIRS[@]}"; do
+    _PAIRS+=("${SRC_DIRS[$_i]}"$'\x1f'"${DEST_DIRS[$_i]}")
+done
+IFS=$'\n' read -r -d '' -a _PAIRS_SORTED < <(printf '%s\n' "${_PAIRS[@]}" | sort && printf '\0') || true
+_SOURCES_FP=""
+_DESTS_FP=""
+for _p in "${_PAIRS_SORTED[@]}"; do
+    _src="${_p%$'\x1f'*}"
+    _dst="${_p#*$'\x1f'}"
+    _SOURCES_FP+="${_src}"$'\x1f'
+    _DESTS_FP+="${_dst}"$'\x1f'
+done
+_SOURCES_FP="${_SOURCES_FP%$'\x1f'}"
+_DESTS_FP="${_DESTS_FP%$'\x1f'}"
+
+if [ -n "${VERISYNC_MARKER:-}" ]; then
+    _MY_SESSION_NAME="$(basename "$VERISYNC_MARKER")"
+    _marker_update_config "$_REMOTE_FP" "$_SOURCES_FP" "$_DESTS_FP"
+    _check_duplicate_session "$_MY_SESSION_NAME" "$_REMOTE_FP" "$_SOURCES_FP" "$_DESTS_FP"
+fi
+unset _PAIRS _PAIRS_SORTED _REMOTE_FP _SOURCES_FP _DESTS_FP _MY_SESSION_NAME
 
 # SSH multiplexing — shared across the whole batch
 SSH_CTRL="/tmp/ssh_transfer_$$"
