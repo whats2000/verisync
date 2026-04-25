@@ -7,41 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0]  2026-04-25
+
 ### Added
 
-- **Session discovery & cross-node reattach** — `verisync ls` lists active sessions across login
-  nodes (using shared markers in `$HOME/.verisync/sessions`), and `verisync -r` / `--reattach`
-  picks a session and reattaches; if the session lives on another login node, the user is SSH'd
-  there to re-run `verisync -r` after 2FA
-- Session names now include the short hostname (`verisync_<host>_<pid>`) to avoid PID collisions
-  between login nodes
-- Stale-marker pruning (`p` option) and auto-cleanup of the session marker on exit
-- **One-step cross-node reattach** — when the chosen session lives on another login node,
-  `verisync -r` now SSHes there and runs `screen -r <session>` automatically; if the
-  session has disappeared in the meantime, it falls back to a login shell instead of
-  exiting
-- **Duplicate-session detection** — before starting a transfer, verisync compares the
-  remote target and each individual `(source → destination)` pair against active
-  session markers across login nodes. Any pair that overlaps a running batch is
-  reported with the conflicting session and login node; the user can abort, kill the
+- **Session discovery across login nodes** — `verisync ls` lists active sessions
+  across all login nodes via shared markers in `$HOME/.verisync/sessions`,
+  showing session, login node, age, and status (alive / stale / remote)
+- **Cross-node reattach** — `verisync -r` / `--reattach` picks a session and
+  reattaches. If it lives on the current node, `screen -r` runs locally; if on
+  another login node, verisync SSHes there and runs `screen -r <session>`
+  automatically (2FA prompt expected). When the screen session has disappeared
+  in the meantime, the SSH falls back to a login shell instead of exiting
+- Stale-marker pruning (`p` option in the reattach picker) and auto-cleanup of
+  the session marker on transfer exit
+- Hostname is now part of the session name (`verisync_<host>_<pid>`) to avoid
+  PID collisions between login nodes
+- **Duplicate-transfer detection** — before starting a transfer, verisync
+  compares the remote target and each `(source → destination)` pair against
+  active session markers. Any pair that overlaps a running batch is reported
+  with its session and login node, and the user can abort, kill the
   conflicting session(s), or ignore. Kill applies to local-node sessions only;
-  cross-node conflicts are reported but skipped on kill. With `-y`/`--yes` any
-  duplicate aborts to avoid clobbering a running transfer
-- Per-pair check means partially overlapping batches (e.g. one shared source out of
-  several) are now flagged instead of slipping past whole-batch equality
+  cross-node conflicts are reported but skipped on kill. Per-pair matching
+  catches partial overlap (e.g. one shared source out of several) that
+  whole-batch equality would miss
 - **Pre-wrap duplicate check** — when full config is provided on the CLI, the
-  duplicate-pair check now runs *before* the screen/tmux wrap so abort messages
-  (especially under `--yes`) reach the user's terminal instead of being eaten
-  by a dying screen session; interactive runs still defer the check until after
-  Step 1 inside the wrap
+  duplicate-pair check runs *before* the screen/tmux wrap so abort messages
+  reach the user's terminal instead of being eaten by a dying screen session;
+  interactive runs still defer the check until after Step 1 inside the wrap
 
 ### Changed
 
-- `--yes` no longer silently aborts on a duplicate-pair conflict — it now prints a
-  clear "auto-confirms safe paths only" message pointing at the conflict list and
-  suggests re-running interactively to choose abort/kill/ignore
-- Session markers now record `REMOTE`, `SOURCES`, and `DESTS` (NUL-safe via US `\x1f`
-  separator) so duplicate detection works across nodes
+- `--yes` no longer silently aborts on a duplicate-pair conflict — it prints
+  an explicit "auto-confirms safe paths only" message pointing at the conflict
+  list and suggests re-running interactively to choose abort/kill/ignore
+- Session markers now record `REMOTE`, `SOURCES`, and `DESTS` (joined with US
+  `\x1f` so paths with spaces are safe) to power cross-node duplicate detection
 
 ## [1.2.1]  2026-03-09
 

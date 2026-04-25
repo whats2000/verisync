@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "verisync"
-version = "1.2.1"
+version = "1.3.0"
 description = "Interactive directory/file transfer with SHA-256 checksum verification over SSH"
 readme = "README.md"
 license = { file = "LICENSE" }

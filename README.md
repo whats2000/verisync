@@ -42,6 +42,9 @@ Transfer files or directories to a remote server via rsync or tar.gz, then autom
 - 📏 **Space checks** — remote free disk space is measured before transfer; warns if total exceeds 100 GiB
 - 🖥️ **Interactive + CLI** — all parameters can be supplied as CLI flags or entered interactively at runtime
 - 🤖 **Auto-confirm** (`-y`) — skip prompts for scripted/non-interactive usage
+- 🛡️ **Disconnect guard** — auto-wraps in `screen` (or `tmux`) so SSH drops don't kill the transfer
+- 🔍 **Cross-node session discovery** — `verisync ls` and `verisync -r` find and reattach to active sessions across login nodes (one-step SSH + `screen -r`, with shell fallback if the session is gone)
+- 🚫 **Duplicate-transfer detection** — per `(source → destination)` pair check across active sessions on the same remote; abort, kill the conflicting session, or ignore. Runs *before* the screen wrap when full config is on the CLI so abort messages reach the terminal
 - 🕒 **Elapsed time** — reports total transfer and verification duration
 
 ---
@@ -90,7 +93,10 @@ bash verisync.sh --help
 ## Usage
 
 ```
-verisync [OPTIONS]
+verisync [OPTIONS]            Start a new transfer
+verisync ls                   List active verisync sessions across login nodes
+verisync -r | --reattach      Pick an active session and reattach
+                              (cross-node sessions: SSH + auto screen -r)
 ```
 
 ### Arguments
@@ -143,6 +149,18 @@ verisync -s /data/project -u alice -H hpc.example.com -d /scratch/alice/ --zip
 
 ```bash
 verisync -s /data/project -u alice -H hpc.example.com -d /scratch/alice/ -y
+```
+
+**List active sessions across login nodes**:
+
+```bash
+verisync ls
+```
+
+**Reattach to an active session** (auto-SSH + `screen -r` for cross-node):
+
+```bash
+verisync -r
 ```
 
 ---
