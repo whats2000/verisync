@@ -94,71 +94,131 @@ _join_us() {
     echo "$*"
 }
 
+_parse_pairs() {
+    # _parse_pairs <sources_us> <dests_us>
+    # Echoes pairs as "src\x1fdst", one per line. Empty input -> empty output.
+    local sources_us="$1" dests_us="$2"
+    [ -z "$sources_us" ] && return 0
+    local -a srcs dsts
+    IFS=$'\x1f' read -ra srcs <<< "$sources_us"
+    IFS=$'\x1f' read -ra dsts <<< "$dests_us"
+    local n=${#srcs[@]}
+    local i
+    for ((i=0; i<n; i++)); do
+        printf '%s\x1f%s\n' "${srcs[$i]}" "${dsts[$i]:-}"
+    done
+}
+
 _check_duplicate_session() {
-    # _check_duplicate_session <my_session_name> <remote> <sources_joined> <dests_joined>
-    # Returns 0 if no duplicate, otherwise prompts user.
+    # _check_duplicate_session <my_session_name> <remote> <sources_us> <dests_us>
+    # Per-pair (src, dst) duplicate detection: any pair from current batch that
+    # also appears in another active batch (same REMOTE) is reported.
+    # Returns 0 (or die) depending on user choice.
     local my_sess="$1" my_remote="$2" my_sources="$3" my_dests="$4"
+
+    local my_pairs
+    my_pairs=$(_parse_pairs "$my_sources" "$my_dests")
+
+    # Collect conflicts: parallel arrays of (session, node, pair).
+    local -a conflict_sess=() conflict_node=() conflict_pair=()
+    local current_node
+    current_node="$(hostname -s)"
+
     shopt -s nullglob
     local files=("$MARKER_DIR"/*)
     shopt -u nullglob
-    local match_session="" match_node=""
+    local f
     for f in "${files[@]}"; do
         [ "$(basename "$f")" = "$my_sess" ] && continue
         unset SESSION LOGIN_NODE START_TS WRAPPER REMOTE SOURCES DESTS
         # shellcheck disable=SC1090
         source "$f" 2>/dev/null || continue
-        # Skip if config not yet filled (other session still in Step 1)
+        # Skip markers without config (other session still in Step 1)
         [ -z "${SOURCES:-}" ] && continue
-        # Skip stale (no screen on its own node, can only check if same node)
-        if [ "${LOGIN_NODE:-}" = "$(hostname -s)" ] \
+        # Skip stale local screens
+        if [ "${LOGIN_NODE:-}" = "$current_node" ] \
            && ! screen -ls 2>/dev/null | grep -q "$SESSION"; then
             continue
         fi
-        if [ "${REMOTE:-}" = "$my_remote" ] \
-           && [ "${SOURCES:-}" = "$my_sources" ] \
-           && [ "${DESTS:-}" = "$my_dests" ]; then
-            match_session="$SESSION"
-            match_node="$LOGIN_NODE"
-            break
-        fi
+        # Only conflict-able if same remote endpoint
+        [ "${REMOTE:-}" = "$my_remote" ] || continue
+
+        local their_pairs
+        their_pairs=$(_parse_pairs "${SOURCES:-}" "${DESTS:-}")
+
+        local mypair
+        while IFS= read -r mypair; do
+            [ -z "$mypair" ] && continue
+            if echo "$their_pairs" | grep -Fxq "$mypair"; then
+                conflict_sess+=("$SESSION")
+                conflict_node+=("$LOGIN_NODE")
+                conflict_pair+=("$mypair")
+            fi
+        done <<< "$my_pairs"
     done
 
-    [ -z "$match_session" ] && return 0
+    [ ${#conflict_sess[@]} -eq 0 ] && return 0
 
+    # Build human-readable report.
     echo ""
-    warn "Duplicate transfer already running:"
-    warn "  session  : $match_session"
-    warn "  on node  : $match_node"
-    warn "  same remote=$my_remote, same sources, same destinations"
+    warn "Duplicate (src → dst) pair(s) detected against active sessions:"
+    local i
+    for i in "${!conflict_sess[@]}"; do
+        local pair="${conflict_pair[$i]}"
+        local src="${pair%%$'\x1f'*}"
+        local dst="${pair#*$'\x1f'}"
+        warn "  ${src} → ${dst}"
+        warn "      in session ${conflict_sess[$i]}  on  ${conflict_node[$i]}"
+    done
     echo ""
+
+    # Decide what kill options make sense based on where conflicts live.
+    local any_local=0 any_remote=0 n
+    for n in "${conflict_node[@]}"; do
+        if [ "$n" = "$current_node" ]; then any_local=1; else any_remote=1; fi
+    done
 
     if [ "${AUTO_YES:-false}" = true ]; then
-        warn "--yes set: aborting current transfer to avoid clobbering the running one."
-        die "Aborted (duplicate session $match_session already running on $match_node)."
+        warn "--yes set: aborting current transfer to avoid clobbering."
+        die "Aborted (duplicate pairs detected)."
     fi
 
     local prompt
-    if [ "$match_node" = "$(hostname -s)" ]; then
-        prompt="  Choose: (a)bort current / (k)ill other / (i)gnore and continue [a/k/i]: "
+    if [ "$any_local" = "1" ] && [ "$any_remote" = "0" ]; then
+        prompt="  (a)bort current  /  (k)ill conflicting session(s)  /  (i)gnore  [a/k/i]: "
+    elif [ "$any_remote" = "1" ] && [ "$any_local" = "0" ]; then
+        prompt="  (a)bort current  /  (i)gnore — conflicts on remote login nodes, can't kill from here  [a/i]: "
     else
-        prompt="  Other session is on $match_node — can't kill it from here. Choose: (a)bort current / (i)gnore and continue [a/i]: "
+        prompt="  (a)bort current  /  (k)ill local conflicting (remote-node ones won't be touched)  /  (i)gnore  [a/k/i]: "
     fi
     local choice
     read -rp "$prompt" choice
     case "$choice" in
         a|A|"")
-            die "Aborted by user (duplicate of $match_session)." ;;
+            die "Aborted by user." ;;
         k|K)
-            if [ "$match_node" != "$(hostname -s)" ]; then
-                die "Cannot kill remote session from here. Aborting."
-            fi
-            info "Killing screen session $match_session …"
-            screen -X -S "$match_session" quit 2>/dev/null || warn "screen -X quit failed; you may need to clean up manually."
-            rm -f "$MARKER_DIR/$match_session"
-            ok "Other session terminated. Continuing with current transfer."
+            local killed=0 skipped=0
+            local -A seen=()
+            for i in "${!conflict_sess[@]}"; do
+                local sess="${conflict_sess[$i]}" node="${conflict_node[$i]}"
+                # dedupe — kill each session only once even if it has multiple pair hits
+                [ -n "${seen[$sess]:-}" ] && continue
+                seen[$sess]=1
+                if [ "$node" = "$current_node" ]; then
+                    info "Killing local screen session $sess …"
+                    screen -X -S "$sess" quit 2>/dev/null \
+                        || warn "screen -X quit failed for $sess; cleaning marker anyway"
+                    rm -f "$MARKER_DIR/$sess"
+                    killed=$((killed+1))
+                else
+                    warn "Skipping $sess on $node (cross-node, can't kill from here)"
+                    skipped=$((skipped+1))
+                fi
+            done
+            ok "Killed $killed session(s); skipped $skipped remote-node session(s). Continuing."
             ;;
         i|I)
-            warn "Ignoring duplicate; proceeding (may clobber the other transfer)." ;;
+            warn "Ignoring duplicate; proceeding (transfers will race)." ;;
         *)
             die "Invalid choice; aborting." ;;
     esac
@@ -182,7 +242,8 @@ _verisync_list_or_attach() {
 
     local i=0
     local -a vs_session=() vs_node=() vs_status=()
-    local now=$(date +%s)
+    local now
+    now=$(date +%s)
     for f in "${files[@]}"; do
         unset SESSION LOGIN_NODE START_TS WRAPPER
         # shellcheck disable=SC1090
